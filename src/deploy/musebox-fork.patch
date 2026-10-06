@@ -1,6 +1,6 @@
-diff -ru -x __pycache__ mg/linux/src/musegadget/executor.py /home/agent/code/muse/src/sdk/src/musegadget/executor.py
---- mg/linux/src/musegadget/executor.py	2026-10-05 19:59:20.594533962 -0400
-+++ /home/agent/code/muse/src/sdk/src/musegadget/executor.py	2026-10-05 19:54:36.016356772 -0400
+diff -ru -x __pycache__ /tmp/mg/linux/src/musegadget/executor.py src/sdk/src/musegadget/executor.py
+--- /tmp/mg/linux/src/musegadget/executor.py	2026-10-05 19:59:20.594533962 -0400
++++ src/sdk/src/musegadget/executor.py	2026-10-05 22:17:10.707629444 -0400
 @@ -34,6 +34,7 @@
  from dataclasses import dataclass
  
@@ -46,7 +46,7 @@ diff -ru -x __pycache__ mg/linux/src/musegadget/executor.py /home/agent/code/mus
          },
          "optional": {
              "offset": {"type": "integer", "description": "Byte offset. Default 0."},
-@@ -74,12 +69,14 @@
+@@ -74,12 +69,16 @@
      },
      "file.write": {
          "description": (
@@ -57,7 +57,9 @@ diff -ru -x __pycache__ mg/linux/src/musegadget/executor.py /home/agent/code/mus
 +            "own VM) in chunks of up to 64 KiB (base64). Start at "
 +            "offset 0, send chunks in order, and set final=true on the last one; "
 +            "the file is replaced atomically, and only if sha256 (when given) "
-+            f"matches. Only paths under {BOX}/tasks/<id>/out/ are writable."
++            f"matches. Only paths under {BOX}/tasks/<id>/out/ are writable. "
++            "For files over about 8 KiB, upload them with your file sharing and "
++            "list the links in out/LINKS.tsv instead (see the box README)."
          ),
          "required": {
 -            "path": {"type": "string", "description": "Absolute destination path."},
@@ -65,7 +67,7 @@ diff -ru -x __pycache__ mg/linux/src/musegadget/executor.py /home/agent/code/mus
              "data_b64": {"type": "string", "description": "This chunk's bytes, base64-encoded."},
          },
          "optional": {
-@@ -130,8 +127,6 @@
+@@ -130,8 +129,6 @@
  
      def run(self, command: str, params: dict, timeout_ms: int | None = None) -> dict:
          try:
@@ -74,7 +76,7 @@ diff -ru -x __pycache__ mg/linux/src/musegadget/executor.py /home/agent/code/mus
              if command in ("file.read", "file.write"):
                  return self.file_op(command.split(".")[1], params)
              if command == "device.health":
-@@ -149,6 +144,7 @@
+@@ -149,6 +146,7 @@
              "USER": self.account.name,
              "LOGNAME": self.account.name,
              "PATH": SAFE_PATH,
@@ -82,9 +84,9 @@ diff -ru -x __pycache__ mg/linux/src/musegadget/executor.py /home/agent/code/mus
              "LANG": os.environ.get("LANG", "C.UTF-8"),
          }
          options: dict = {"env": env, "start_new_session": True}
-diff -ru -x __pycache__ mg/linux/src/musegadget/fileops.py /home/agent/code/muse/src/sdk/src/musegadget/fileops.py
---- mg/linux/src/musegadget/fileops.py	2026-10-05 19:59:20.541532811 -0400
-+++ /home/agent/code/muse/src/sdk/src/musegadget/fileops.py	2026-10-05 19:54:36.016356772 -0400
+diff -ru -x __pycache__ /tmp/mg/linux/src/musegadget/fileops.py src/sdk/src/musegadget/fileops.py
+--- /tmp/mg/linux/src/musegadget/fileops.py	2026-10-05 19:59:20.541532811 -0400
++++ src/sdk/src/musegadget/fileops.py	2026-10-05 19:59:30.356745867 -0400
 @@ -32,12 +32,34 @@
  import sys
  
@@ -138,9 +140,9 @@ diff -ru -x __pycache__ mg/linux/src/musegadget/fileops.py /home/agent/code/muse
      offset = int(request.get("offset") or 0)
      data = base64.b64decode(request.get("data_b64") or "", validate=True)
      if len(data) > MAX_CHUNK_BYTES:
-diff -ru mg/linux/tests/test_executor.py /home/agent/code/muse/src/sdk/tests/test_executor.py
---- mg/linux/tests/test_executor.py	2026-10-05 19:59:20.594533962 -0400
-+++ /home/agent/code/muse/src/sdk/tests/test_executor.py	2026-10-05 19:54:40.426452497 -0400
+diff -ru /tmp/mg/linux/tests/test_executor.py src/sdk/tests/test_executor.py
+--- /tmp/mg/linux/tests/test_executor.py	2026-10-05 19:59:20.594533962 -0400
++++ src/sdk/tests/test_executor.py	2026-10-05 19:59:30.357745889 -0400
 @@ -34,51 +34,29 @@
      return Executor(Account(account.name, account.uid, account.gid, str(tmp_path)))
  

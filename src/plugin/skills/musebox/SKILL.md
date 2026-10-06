@@ -55,8 +55,16 @@ come back to you.**
    the background rather than blocking:
 
    ```bash
-   musebox wait "$id" 900     # prints out/DONE.md, exits non-zero on timeout
+   musebox wait "$id" 900     # prints out/DONE.md, then fetches linked files
    ```
+
+   Muse writes small text results (up to about 8 KiB) straight into `out/`.
+   Anything bigger it uploads to its own file sharing and lists in
+   `out/LINKS.tsv` (target, url, bytes, sha256). `musebox wait` downloads
+   those into `out/` and checks size and hash; if that fails, it exits
+   non-zero with the reason, and `musebox fetch "$id"` retries. Links expire
+   about two days after upload, so fetch promptly. If you expect large output, say so in
+   TASK.md ("upload the CSV and list it in LINKS.tsv").
 
 4. Collect:
 
@@ -80,7 +88,11 @@ come back to you.**
   and writes files. Ask for analysis, writing, summarizing, transforming,
   reviewing, not for running things.
 - Reads are 64 KiB per call (Muse chunks automatically), so very large inputs
-  are slow. Trim or excerpt them.
+  are slow. Trim or excerpt them. Large outputs are fine: they come back as
+  links (see step 3).
+- Linked files sit on muse.ai behind an unguessable URL until they expire;
+  anyone holding the link can download them. Keep that in mind for what you
+  ask Muse to produce.
 - If `musebox wait` times out, check `musebox cat <id>` for partial output
   and the gadget log (`sudo journalctl -u musegadget -n 50`, if you have
   sudo): `invoke file.read` lines mean Muse is working; none means it never
