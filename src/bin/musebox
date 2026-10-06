@@ -5,7 +5,9 @@
 #   musebox new <slug> [-t TASK.md|-] [FILE...]
 #                                  make a task, copy FILEs into in/, print its id
 #   musebox send <id>              list inputs in MANIFEST.txt and tell Muse
-#   musebox wait <id> [SECONDS]    block until out/DONE.md appears (default 1800)
+#   musebox wait <id> [SECONDS]    block until out/DONE.md appears (default 1800),
+#                                  then fetch any linked files
+#   musebox fetch <id>             download the files listed in out/LINKS.tsv
 #   musebox cat <id> [FILE]        print out/FILE, or list out/ without FILE
 #   musebox pull <id> DEST         copy out/ into DEST
 #   musebox ls                     tasks and their state (draft, sent, done)
@@ -18,6 +20,7 @@ set -euo pipefail
 BOX="${MUSEBOX:-/srv/musebox}"
 TASKS="$BOX/tasks"
 GROUP=musebox
+FETCH_MAX="${MUSEBOX_FETCH_MAX:-1073741824}"   # bytes per linked file
 
 die() { echo "musebox: $*" >&2; exit 1; }
 
@@ -85,7 +88,8 @@ cmd_send() {
         "New musebox task $id, on my device $(hostname) (the gadget sending this message)." \
         "These paths are on that device, NOT on your own VM: don't look for them with your own shell." \
         "Use the device's file.read command to read $BOX/README.md (how the box works), then $dir/TASK.md." \
-        "Use the device's file.write command to put results under $dir/out/, finishing with $dir/out/DONE.md." |
+        "Use the device's file.write command to put results under $dir/out/, finishing with $dir/out/DONE.md." \
+        "For results over about 8 KiB, upload them and list the links in out/LINKS.tsv instead (see the README's \"Large files\")." |
         musegadget send-user-msg --session-id "$(cat "$dir/.session")" - >/dev/null
     date -Is >"$dir/.sent"
     echo "sent $id" >&2
@@ -109,13 +113,48 @@ cmd_wait() {
         sleep 5; waited=$((waited + 5))
     done
     cat "$dir/out/DONE.md"
+    [ ! -f "$dir/out/LINKS.tsv" ] || cmd_fetch "$1" >&2
+}
+
+# Muse uploads big results to its own file sharing and lists them in
+# out/LINKS.tsv (target, url, bytes, sha256). Download them here, on the host
+# side: the gadget itself has no network.
+cmd_fetch() {
+    local dir links target url bytes sha tmp got n=0
+    dir="$(task_dir "${1:-}")"
+    links="$dir/out/LINKS.tsv"
+    [ -f "$links" ] || die "no out/LINKS.tsv in $1"
+    while IFS=$'\t' read -r target url bytes sha _; do
+        target="${target%$'\r'}"; url="${url%$'\r'}"; bytes="${bytes%$'\r'}"; sha="${sha%$'\r'}"
+        [ -n "$target" ] && [ "$target" != target ] || continue
+        [[ "$target" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && "$target" != *..* ]] || die "bad target: $target"
+        case "$target" in DONE.md|LINKS.tsv) die "LINKS.tsv can't replace $target" ;; esac
+        [[ "$url" =~ ^https://muse\.ai/files/ ]] || die "not a muse.ai file link: $url"
+        [[ "$bytes" =~ ^[0-9]+$ ]] && [ "$bytes" -le "$FETCH_MAX" ] || die "bad or too large size for $target: $bytes"
+        sha="${sha,,}"
+        [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || die "bad sha256 for $target"
+        if [ -f "$dir/out/$target" ] && [ "$(sha256sum <"$dir/out/$target" | cut -c1-64)" = "$sha" ]; then
+            echo "have $target" >&2; continue
+        fi
+        mkdir -p "$(dirname "$dir/out/$target")"
+        tmp="$(dirname "$dir/out/$target")/.$(basename "$target").fetch"
+        curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize "$FETCH_MAX" \
+            -o "$tmp" "$url" || { rm -f "$tmp"; die "download failed: $target"; }
+        got="$(stat -c %s "$tmp")"
+        [ "$got" = "$bytes" ] || { rm -f "$tmp"; die "$target: got $got bytes, LINKS.tsv says $bytes"; }
+        [ "$(sha256sum <"$tmp" | cut -c1-64)" = "$sha" ] || { rm -f "$tmp"; die "$target: sha256 mismatch"; }
+        mv -f "$tmp" "$dir/out/$target"
+        echo "fetched $target ($bytes bytes)" >&2
+        n=$((n + 1))
+    done <"$links"
+    echo "$n file(s) fetched into $dir/out" >&2
 }
 
 cmd_cat() {
     local dir
     dir="$(task_dir "${1:-}")"
     if [ -z "${2:-}" ]; then
-        (cd "$dir/out" && find . -type f ! -name '.*.musegadget-partial' -printf '%P\t%s\n' | sort)
+        (cd "$dir/out" && find . -type f ! -name '.*.musegadget-partial' ! -name '.*.fetch' -printf '%P\t%s\n' | sort)
         return
     fi
     case "$2" in /*|*..*) die "FILE is relative to out/" ;; esac
@@ -129,7 +168,7 @@ cmd_pull() {
     mkdir -p -- "$dest"
     # Group-readable copies, owned by the caller.
     cp -r --no-preserve=mode,ownership -- "$dir/out/." "$dest/"
-    find "$dest" -name '.*.musegadget-partial' -delete
+    find "$dest" \( -name '.*.musegadget-partial' -o -name '.*.fetch' \) -delete
     echo "$dest"
 }
 
@@ -150,6 +189,6 @@ cmd_rm() {
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
-    run|new|send|wait|cat|pull|ls|rm) need_group "$cmd" "$@"; umask 0007; "cmd_$cmd" "$@" ;;
-    *) sed -n '2,15s/^# \{0,1\}//p' "$0"; [ -z "$cmd" ] || exit 1 ;;
+    run|new|send|wait|fetch|cat|pull|ls|rm) need_group "$cmd" "$@"; umask 0007; "cmd_$cmd" "$@" ;;
+    *) sed -n '2,18s/^# \{0,1\}//p' "$0"; [ -z "$cmd" ] || exit 1 ;;
 esac

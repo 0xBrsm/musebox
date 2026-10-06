@@ -73,7 +73,9 @@ COMMAND_SPECS = {
             "own VM) in chunks of up to 64 KiB (base64). Start at "
             "offset 0, send chunks in order, and set final=true on the last one; "
             "the file is replaced atomically, and only if sha256 (when given) "
-            f"matches. Only paths under {BOX}/tasks/<id>/out/ are writable."
+            f"matches. Only paths under {BOX}/tasks/<id>/out/ are writable. "
+            "For files over about 8 KiB, upload them with your file sharing and "
+            "list the links in out/LINKS.tsv instead (see the box README)."
         ),
         "required": {
             "path": {"type": "string", "description": f"Absolute path under {BOX}/tasks/<id>/out/."},

@@ -46,6 +46,22 @@ for the task. Muse reads `TASK.md` and the inputs with the gadget's
 `file.read` command, writes its results with `file.write`, and writes
 `out/DONE.md` last. A simple task takes under a minute.
 
+Muse has to type everything it writes through `file.write`, so that only works
+well for small files. For anything over about 8 KiB, Muse builds the file on
+its own cloud VM, uploads it to muse.ai file sharing, and lists it in
+`out/LINKS.tsv`:
+
+```
+target         url                          bytes    sha256
+snapshots.csv  https://muse.ai/files/...    682406   d8f99690...
+```
+
+`musebox wait` (or `musebox fetch`) downloads each link into `out/` and checks
+the size and SHA-256. It only accepts `https://muse.ai/files/` links and plain
+file names. The download runs on your side; the gadget itself still has no
+network access. Shared links are reachable by anyone who has the URL until
+they expire, about two days after upload.
+
 ## What Muse can and can't do
 
 The SDK is patched and sandboxed in three layers:
@@ -139,7 +155,8 @@ Then:
 | `musebox run <name> -t TASK.md [FILE...]` | create a task and send it; prints the task id |
 | `musebox new <name> [-t TASK.md] [FILE...]` | create a task without sending it |
 | `musebox send <id>` | send a task created with `new` |
-| `musebox wait <id> [SECONDS]` | wait for `out/DONE.md` and print it (default timeout 30 min) |
+| `musebox wait <id> [SECONDS]` | wait for `out/DONE.md`, print it and download linked files (default timeout 30 min) |
+| `musebox fetch <id>` | download the files listed in `out/LINKS.tsv` |
 | `musebox cat <id> [FILE]` | list the result files, or print one |
 | `musebox pull <id> DEST` | copy the result files to DEST |
 | `musebox ls` | list tasks as draft, sent or done |
@@ -174,7 +191,8 @@ Or link the skill by hand:
   machine runs fine on another.
 - The Muse app sometimes drops the Bluetooth connection right after you
   confirm, then reconnects by itself.
-- Muse reads files 64 KiB at a time, so very large inputs are slow.
+- Muse reads files 64 KiB at a time, so very large inputs are slow. Large
+  outputs come back as links instead.
 
 ## Uninstall
 
