@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# musebox: leave tasks for Muse in the drop box and collect its results.
+#
+#   musebox run <slug> -t TASK.md [FILE...]   new + send in one step; prints the id
+#   musebox new <slug> [-t TASK.md|-] [FILE...]
+#                                  make a task, copy FILEs into in/, print its id
+#   musebox send <id>              list inputs in MANIFEST.txt and tell Muse
+#   musebox wait <id> [SECONDS]    block until out/DONE.md appears (default 1800)
+#   musebox cat <id> [FILE]        print out/FILE, or list out/ without FILE
+#   musebox pull <id> DEST         copy out/ into DEST
+#   musebox ls                     tasks and their state (draft, sent, done)
+#   musebox rm <id>                delete a task
+#
+# Muse can read the whole box and write only tasks/<id>/out/. Each task gets
+# its own Muse side chat (a UUID kept in .session). See README.md in the box.
+set -euo pipefail
+
+BOX="${MUSEBOX:-/srv/musebox}"
+TASKS="$BOX/tasks"
+GROUP=musebox
+
+die() { echo "musebox: $*" >&2; exit 1; }
+
+# Sessions started before the account joined the group don't carry it yet;
+# members can pick it up with sg without a password.
+need_group() {
+    id -Gn | tr ' ' '\n' | grep -qx "$GROUP" && return 0
+    getent group "$GROUP" | cut -d: -f4 | tr ',' '\n' | grep -qx "$(id -un)" \
+        || die "$(id -un) is not in the $GROUP group"
+    exec sg "$GROUP" -c "$(printf '%q ' "$0" "$@")"
+}
+
+task_dir() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9-]{1,64}$ ]] || die "bad task id: ${1:-}"
+    [ -d "$TASKS/$1" ] || die "no task $1"
+    echo "$TASKS/$1"
+}
+
+state() {
+    if [ -f "$1/out/DONE.md" ]; then echo done
+    elif [ -f "$1/.sent" ]; then echo sent
+    else echo draft; fi
+}
+
+cmd_new() {
+    local slug="${1:-}" task=""; shift || true
+    if [ "${1:-}" = -t ]; then task="${2:?-t needs a file or -}"; shift 2; fi
+    slug="$(printf '%s' "$slug" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)"
+    [ -n "$slug" ] || die "usage: musebox new <slug> [-t TASK.md|-] [FILE...]"
+    [ -z "$task" ] || [ "$task" = - ] || [ -f "$task" ] || die "no such file: $task"
+    local id dir
+    id="$(date +%Y%m%d-%H%M%S)-$slug"
+    dir="$TASKS/$id"
+    mkdir -p "$dir/in"
+    mkdir "$dir/out"
+    chmod 2770 "$dir/out"
+    chmod 2750 "$dir"
+    cat /proc/sys/kernel/random/uuid >"$dir/.session"
+    [ $# -eq 0 ] || cp -r -- "$@" "$dir/in/"
+    if [ -n "$task" ]; then
+        cat -- "$task" >"$dir/TASK.md"
+    else
+        cat >"$dir/TASK.md" <<'EOF'
+# Task
+
+<!-- Replace this comment with what Muse should do: the question, how to use
+     the files in in/, and which files to write in out/. Then run
+     `musebox send <id>`. -->
+EOF
+    fi
+    echo "$id"
+}
+
+cmd_send() {
+    local dir id
+    dir="$(task_dir "${1:-}")"; id="$1"
+    grep -q 'Replace this comment' "$dir/TASK.md" && die "fill in $dir/TASK.md first"
+    [ -s "$dir/TASK.md" ] || die "$dir/TASK.md is empty"
+    (cd "$dir" && find in -type f -printf '%p\t%s\n' | sort) >"$dir/MANIFEST.txt"
+    # Muse reads everything but in/ and TASK.md stay ours.
+    chmod -R g+rX,g-w "$dir/in" "$dir/TASK.md" "$dir/MANIFEST.txt"
+    # Without the "not your own VM" part Muse searches its cloud VM's
+    # filesystem instead of calling the device's file commands.
+    printf '%s\n' \
+        "New musebox task $id, on my device $(hostname) (the gadget sending this message)." \
+        "These paths are on that device, NOT on your own VM: don't look for them with your own shell." \
+        "Use the device's file.read command to read $BOX/README.md (how the box works), then $dir/TASK.md." \
+        "Use the device's file.write command to put results under $dir/out/, finishing with $dir/out/DONE.md." |
+        musegadget send-user-msg --session-id "$(cat "$dir/.session")" - >/dev/null
+    date -Is >"$dir/.sent"
+    echo "sent $id" >&2
+}
+
+cmd_run() {
+    local slug="${1:-}"; shift || true
+    [ "${1:-}" = -t ] || die "usage: musebox run <slug> -t TASK.md [FILE...]"
+    local id
+    id="$(cmd_new "$slug" "$@")"
+    cmd_send "$id"
+    echo "$id"
+}
+
+cmd_wait() {
+    local dir limit="${2:-1800}" waited=0
+    dir="$(task_dir "${1:-}")"
+    [ -f "$dir/.sent" ] || die "$1 hasn't been sent"
+    until [ -f "$dir/out/DONE.md" ]; do
+        [ "$waited" -lt "$limit" ] || die "no out/DONE.md after ${limit}s"
+        sleep 5; waited=$((waited + 5))
+    done
+    cat "$dir/out/DONE.md"
+}
+
+cmd_cat() {
+    local dir
+    dir="$(task_dir "${1:-}")"
+    if [ -z "${2:-}" ]; then
+        (cd "$dir/out" && find . -type f ! -name '.*.musegadget-partial' -printf '%P\t%s\n' | sort)
+        return
+    fi
+    case "$2" in /*|*..*) die "FILE is relative to out/" ;; esac
+    cat -- "$dir/out/$2"
+}
+
+cmd_pull() {
+    local dir dest="${2:-}"
+    dir="$(task_dir "${1:-}")"
+    [ -n "$dest" ] || die "usage: musebox pull <id> DEST"
+    mkdir -p -- "$dest"
+    # Group-readable copies, owned by the caller.
+    cp -r --no-preserve=mode,ownership -- "$dir/out/." "$dest/"
+    find "$dest" -name '.*.musegadget-partial' -delete
+    echo "$dest"
+}
+
+cmd_ls() {
+    local dir
+    for dir in "$TASKS"/*/; do
+        [ -d "$dir" ] || continue
+        dir="${dir%/}"
+        printf '%-6s %s\n' "$(state "$dir")" "${dir##*/}"
+    done
+}
+
+cmd_rm() {
+    local dir
+    dir="$(task_dir "${1:-}")"
+    rm -rf -- "$dir"
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    run|new|send|wait|cat|pull|ls|rm) need_group "$cmd" "$@"; umask 0007; "cmd_$cmd" "$@" ;;
+    *) sed -n '2,15s/^# \{0,1\}//p' "$0"; [ -z "$cmd" ] || exit 1 ;;
+esac

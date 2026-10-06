@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "musebox",
+  "description": "musebox: a files-only drop box between your machine and your Muse.",
+  "owner": {
+    "name": "0xBrsm"
+  },
+  "plugins": [
+    {
+      "name": "musebox",
+      "description": "Dispatch tasks to your Muse through the musebox drop box and collect the result files.",
+      "source": "./src/plugin",
+      "category": "productivity"
+    }
+  ]
+}

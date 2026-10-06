@@ -1,0 +1,46 @@
+# Devcontainer codex session logs
+.devcontainer/.codex/sessions/*
+!.devcontainer/.codex/sessions/.gitkeep
+
+# Devcontainer Claude Code project/session history
+.devcontainer/.claude/projects/*
+!.devcontainer/.claude/projects/.gitkeep
+
+# Scratch space
+/tmp/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local environment
+.env
+.env.*
+
+# Language/tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# Common build artifacts
+dist/
+build/
+out/
+coverage/
+.coverage
+
+# Dependencies
+node_modules/
+
+# Editor swap files
+*.swp
+*.swo

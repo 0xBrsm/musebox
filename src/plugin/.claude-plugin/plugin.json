@@ -1,0 +1,10 @@
+{
+  "name": "musebox",
+  "description": "Dispatch tasks to your Muse (Meta's AI assistant) through a musebox drop box on this machine and collect the result files.",
+  "version": "0.1.0",
+  "author": {
+    "name": "0xBrsm"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["muse", "meta", "delegation", "drop-box"]
+}

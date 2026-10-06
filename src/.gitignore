@@ -1,0 +1,61 @@
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+.astro/
+
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# Rust
+target/
+
+# Go
+bin/
+
+# Java/.NET
+*.class
+*.jar
+*.war
+*.ear
+*.dll
+*.exe
+
+# Coverage
+coverage/
+.coverage
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local env (keep .env.example committed)
+.env
+.env.*
+!.env.example
+
+# musebox CLI lives in bin/
+!/bin/

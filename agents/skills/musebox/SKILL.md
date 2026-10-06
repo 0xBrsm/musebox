@@ -1,0 +1,1 @@
+../../../src/plugin/skills/musebox/SKILL.md

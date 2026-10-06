@@ -1,0 +1,297 @@
+diff -ru -x __pycache__ mg/linux/src/musegadget/executor.py /home/agent/code/muse/src/sdk/src/musegadget/executor.py
+--- mg/linux/src/musegadget/executor.py	2026-10-05 19:59:20.594533962 -0400
++++ /home/agent/code/muse/src/sdk/src/musegadget/executor.py	2026-10-05 19:54:36.016356772 -0400
+@@ -34,6 +34,7 @@
+ from dataclasses import dataclass
+ 
+ from musegadget import __version__
++from musegadget.fileops import BOX
+ 
+ log = logging.getLogger(__name__)
+ 
+@@ -46,26 +47,20 @@
+ MAX_OUTPUT_BYTES = 96 * 1024
+ SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ 
++# musebox fork: no shell. This device is a drop box; Muse reads anything under
++# BOX and writes only under BOX/tasks/<id>/out/ (enforced in fileops.py and by
++# the systemd sandbox).
+ COMMAND_SPECS = {
+-    "system.run": {
++    "file.read": {
+         "description": (
+-            "Run a shell command on this Linux device with bash and return its "
+-            "stdout, stderr and exit code. Output over 96 KiB per stream is "
+-            "truncated."
++            "Read up to 64 KiB of a file in the musebox drop box on this device "
++            "(not your own VM), base64-encoded. "
++            "Call again with next_offset until eof. Start with "
++            f"{BOX}/README.md; each task's files are listed in "
++            f"{BOX}/tasks/<id>/MANIFEST.txt (there is no directory listing)."
+         ),
+         "required": {
+-            "command": {"type": "string", "description": "Shell command line to run."},
+-        },
+-        "optional": {
+-            "cwd": {"type": "string", "description": "Working directory. Default: the account's home."},
+-            "timeout_ms": {"type": "integer", "description": "Kill the command after this long. Default 120000, max 600000."},
+-        },
+-        "timeout_ms": MAX_TIMEOUT_S * 1000 + 5000,
+-    },
+-    "file.read": {
+-        "description": "Read up to 64 KiB of a file, base64-encoded. Call again with next_offset until eof.",
+-        "required": {
+-            "path": {"type": "string", "description": "Absolute path."},
++            "path": {"type": "string", "description": f"Absolute path under {BOX}."},
+         },
+         "optional": {
+             "offset": {"type": "integer", "description": "Byte offset. Default 0."},
+@@ -74,12 +69,14 @@
+     },
+     "file.write": {
+         "description": (
+-            "Write a file in chunks of up to 64 KiB (base64). Start at offset 0, "
+-            "send chunks in order, and set final=true on the last one; the file "
+-            "is replaced atomically, and only if sha256 (when given) matches."
++            "Write a result file to the musebox drop box on this device (not your "
++            "own VM) in chunks of up to 64 KiB (base64). Start at "
++            "offset 0, send chunks in order, and set final=true on the last one; "
++            "the file is replaced atomically, and only if sha256 (when given) "
++            f"matches. Only paths under {BOX}/tasks/<id>/out/ are writable."
+         ),
+         "required": {
+-            "path": {"type": "string", "description": "Absolute destination path."},
++            "path": {"type": "string", "description": f"Absolute path under {BOX}/tasks/<id>/out/."},
+             "data_b64": {"type": "string", "description": "This chunk's bytes, base64-encoded."},
+         },
+         "optional": {
+@@ -130,8 +127,6 @@
+ 
+     def run(self, command: str, params: dict, timeout_ms: int | None = None) -> dict:
+         try:
+-            if command == "system.run":
+-                return self.system_run(params, timeout_ms)
+             if command in ("file.read", "file.write"):
+                 return self.file_op(command.split(".")[1], params)
+             if command == "device.health":
+@@ -149,6 +144,7 @@
+             "USER": self.account.name,
+             "LOGNAME": self.account.name,
+             "PATH": SAFE_PATH,
++            "MUSEBOX_ROOT": BOX,
+             "LANG": os.environ.get("LANG", "C.UTF-8"),
+         }
+         options: dict = {"env": env, "start_new_session": True}
+diff -ru -x __pycache__ mg/linux/src/musegadget/fileops.py /home/agent/code/muse/src/sdk/src/musegadget/fileops.py
+--- mg/linux/src/musegadget/fileops.py	2026-10-05 19:59:20.541532811 -0400
++++ /home/agent/code/muse/src/sdk/src/musegadget/fileops.py	2026-10-05 19:54:36.016356772 -0400
+@@ -32,12 +32,34 @@
+ import sys
+ 
+ MAX_CHUNK_BYTES = 64 * 1024
++# musebox fork: reads stay inside the box, writes inside a task's out/ dir.
++# MUSEBOX_ROOT comes from the service's unit (Executor passes it on); Muse
++# can't set it.
++DEFAULT_BOX = "/srv/musebox"
++BOX = os.path.realpath(os.environ.get("MUSEBOX_ROOT") or DEFAULT_BOX)
++TASKS = os.path.join(BOX, "tasks")
+ 
+ 
+ class FileOpError(Exception):
+     pass
+ 
+ 
++def _inside(path: str, root: str) -> bool:
++    return path == root or path.startswith(root + os.sep)
++
++
++def _confine(path: str, write: bool) -> str:
++    """Resolve symlinks and refuse anything outside the box (or out/ for writes)."""
++    real = os.path.realpath(path)
++    if not _inside(real, BOX):
++        raise FileOpError(f"only paths under {BOX} are allowed")
++    if write:
++        parts = os.path.relpath(real, TASKS).split(os.sep)
++        if parts[0] in (os.pardir, ".") or len(parts) < 3 or parts[1] != "out":
++            raise FileOpError(f"writes are allowed only under {TASKS}/<id>/out/")
++    return real
++
++
+ def _partial_path(path: str) -> str:
+     head, tail = os.path.split(path)
+     return os.path.join(head, f".{tail}.musegadget-partial")
+@@ -50,7 +72,7 @@
+ 
+ 
+ def read(request: dict) -> dict:
+-    path = _require_absolute(request.get("path"))
++    path = _confine(_require_absolute(request.get("path")), write=False)
+     offset = int(request.get("offset") or 0)
+     limit = min(int(request.get("limit") or MAX_CHUNK_BYTES), MAX_CHUNK_BYTES)
+     if offset < 0 or limit <= 0:
+@@ -71,7 +93,7 @@
+ 
+ 
+ def write(request: dict) -> dict:
+-    path = _require_absolute(request.get("path"))
++    path = _confine(_require_absolute(request.get("path")), write=True)
+     offset = int(request.get("offset") or 0)
+     data = base64.b64decode(request.get("data_b64") or "", validate=True)
+     if len(data) > MAX_CHUNK_BYTES:
+diff -ru mg/linux/tests/test_executor.py /home/agent/code/muse/src/sdk/tests/test_executor.py
+--- mg/linux/tests/test_executor.py	2026-10-05 19:59:20.594533962 -0400
++++ /home/agent/code/muse/src/sdk/tests/test_executor.py	2026-10-05 19:54:40.426452497 -0400
+@@ -34,51 +34,29 @@
+     return Executor(Account(account.name, account.uid, account.gid, str(tmp_path)))
+ 
+ 
+-def _child_env_passes_pythonpath(monkeypatch):
++def _child_env_passes_pythonpath(monkeypatch, box=None):
+     original = Executor._child_options
+ 
+     def options(self):
+         opts = original(self)
+         opts["env"]["PYTHONPATH"] = os.environ["PYTHONPATH"]
++        if box is not None:
++            opts["env"]["MUSEBOX_ROOT"] = str(box)
+         return opts
+ 
+     monkeypatch.setattr(Executor, "_child_options", options)
+ 
+ 
+-def test_system_run_returns_output_and_exit_code(ex):
+-    result = ex.run("system.run", {"command": "echo out; echo err >&2; exit 3"})
+-    assert result["ok"]
+-    payload = result["payload"]
+-    assert (payload["stdout"], payload["stderr"], payload["exit_code"]) == ("out\n", "err\n", 3)
+-    assert not payload["timed_out"] and not payload["truncated"]
+-
+-
+-def test_system_run_defaults_to_the_account_home(ex, tmp_path):
+-    cwd = ex.run("system.run", {"command": "pwd -P"})["payload"]["stdout"].strip()
+-    assert cwd == os.path.realpath(tmp_path)
+-
+-
+-def test_system_run_times_out_and_kills_the_process_group(ex):
+-    result = ex.run("system.run", {"command": "sleep 30 & sleep 30", "timeout_ms": 300})
+-    assert result["ok"] and result["payload"]["timed_out"]
+-    assert result["payload"]["duration_ms"] < 5000
+-
+-
+-def test_system_run_timeout_does_not_wait_for_a_detached_process(ex):
+-    # A process that left the group with setsid survives the group kill and keeps the
+-    # output pipes open. The timeout must still return promptly.
+-    started = time.monotonic()
+-    result = ex.run("system.run", {"command": "setsid sleep 6 & sleep 30", "timeout_ms": 500})
+-    elapsed = time.monotonic() - started
+-    assert result["ok"] and result["payload"]["timed_out"]
+-    assert elapsed < 4
+-
+-
+-def test_system_run_truncates_large_output(ex):
+-    result = ex.run("system.run", {"command": "head -c 200000 /dev/zero | tr '\\0' x"})
+-    payload = result["payload"]
+-    assert payload["truncated"]
+-    assert len(payload["stdout"]) == executor.MAX_OUTPUT_BYTES
++@pytest.fixture
++def box(tmp_path, monkeypatch):
++    _child_env_passes_pythonpath(monkeypatch, tmp_path)
++    (tmp_path / "tasks" / "t1" / "out").mkdir(parents=True)
++    return tmp_path
++
++
++def test_system_run_is_not_offered(ex):
++    assert "system.run" not in executor.COMMAND_SPECS
++    assert ex.run("system.run", {"command": "id"}) == {"ok": False, "error": "unsupported command: system.run"}
+ 
+ 
+ def test_clip_bounds_the_json_encoded_size():
+@@ -90,17 +68,12 @@
+     assert executor.MAX_OUTPUT_BYTES // 2 < len(json.dumps(text)) - 2 <= executor.MAX_OUTPUT_BYTES
+ 
+ 
+-def test_system_run_requires_a_command(ex):
+-    assert ex.run("system.run", {}) == {"ok": False, "error": "command is required"}
+-
+-
+ def test_unknown_command(ex):
+     assert ex.run("nope", {}) == {"ok": False, "error": "unsupported command: nope"}
+ 
+ 
+-def test_file_write_then_read_round_trip(ex, tmp_path, monkeypatch):
+-    _child_env_passes_pythonpath(monkeypatch)
+-    target = str(tmp_path / "sub" / "blob.bin")
++def test_file_write_then_read_round_trip(ex, box):
++    target = str(box / "tasks" / "t1" / "out" / "sub" / "blob.bin")
+     data = os.urandom(150_000)
+     chunks = [data[i:i + 65536] for i in range(0, len(data), 65536)]
+     for i, chunk in enumerate(chunks):
+@@ -124,28 +97,60 @@
+     assert received == data
+ 
+ 
+-def test_file_write_rejects_a_bad_checksum(ex, tmp_path, monkeypatch):
+-    _child_env_passes_pythonpath(monkeypatch)
+-    target = str(tmp_path / "f")
++def test_file_write_rejects_a_bad_checksum(ex, box):
++    target = str(box / "tasks" / "t1" / "out" / "f")
+     result = ex.run("file.write", {"path": target, "data_b64": "aGk=", "final": True, "sha256": "00"})
+     assert not result["ok"] and "sha256" in result["error"]
+     assert not os.path.exists(target)
+ 
+ 
+-def test_file_write_rejects_out_of_order_chunks(ex, tmp_path, monkeypatch):
+-    _child_env_passes_pythonpath(monkeypatch)
+-    target = str(tmp_path / "f")
++def test_file_write_rejects_out_of_order_chunks(ex, box):
++    target = str(box / "tasks" / "t1" / "out" / "f")
+     assert ex.run("file.write", {"path": target, "data_b64": "aGk="})["ok"]
+     result = ex.run("file.write", {"path": target, "data_b64": "aGk=", "offset": 5})
+     assert not result["ok"] and "expected offset 2" in result["error"]
+ 
+ 
+-def test_file_paths_must_be_absolute(ex, monkeypatch):
+-    _child_env_passes_pythonpath(monkeypatch)
++def test_file_paths_must_be_absolute(ex, box):
+     result = ex.run("file.read", {"path": "relative.txt"})
+     assert result == {"ok": False, "error": "path must be an absolute path"}
+ 
+ 
++def test_file_read_stays_inside_the_box(ex, box, tmp_path_factory):
++    (box / "README.md").write_text("hi")
++    assert ex.run("file.read", {"path": str(box / "README.md")})["ok"]
++    outside = tmp_path_factory.mktemp("outside") / "secret"
++    outside.write_text("no")
++    (box / "link").symlink_to(outside)
++    for path in ("/etc/passwd", str(outside), str(box / "link"), str(box / ".." / "x")):
++        result = ex.run("file.read", {"path": path})
++        assert not result["ok"] and "only paths under" in result["error"], path
++
++
++@pytest.mark.parametrize("rel", [
++    "README.md", "tasks/t1/TASK.md", "tasks/t1/in/data.csv", "tasks/t1/out",
++    "tasks/out/x", "tasks/t1/out/../TASK.md", "tasks/t1/outx/f",
++])
++def test_file_write_only_inside_a_task_out_dir(ex, box, rel):
++    result = ex.run("file.write", {"path": str(box / rel), "data_b64": "aGk=", "final": True})
++    assert not result["ok"] and "writes are allowed only under" in result["error"], rel
++
++
++def test_file_write_refuses_a_symlinked_out_dir(ex, box):
++    (box / "tasks" / "t2").mkdir()
++    (box / "tasks" / "t2" / "out").symlink_to(box / "tasks" / "t1")
++    result = ex.run("file.write", {"path": str(box / "tasks/t2/out/TASK.md"), "data_b64": "aGk=", "final": True})
++    assert not result["ok"] and "writes are allowed only under" in result["error"]
++
+ def test_device_health_reports_basics(ex):
+     payload = ex.run("device.health", {})["payload"]
+     assert payload["version"] and payload["hostname"] and "disk_gb" in payload
++
++
++def test_child_gets_the_service_box():
++    assert ex_box_env() == executor.BOX
++
++
++def ex_box_env():
++    account = Account.current()
++    return Executor(account)._child_options()["env"]["MUSEBOX_ROOT"]

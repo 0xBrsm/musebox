@@ -1,0 +1,25 @@
+{
+  "name": "${localWorkspaceFolderBasename}",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "openai.chatgpt",
+        "anthropic.claude-code"
+      ]
+    }
+  },
+  "remoteUser": "vscode",
+  "containerEnv": {
+      "HOST_WORKSPACE": "${localWorkspaceFolder}"
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/.codex/sessions,target=/home/vscode/.codex/sessions,type=bind",
+    "source=${localWorkspaceFolder}/.devcontainer/.claude/projects,target=/home/vscode/.claude/projects,type=bind"
+  ],
+  "postAttachCommand": "bash .devcontainer/post-attach.sh"
+}
