@@ -56,8 +56,13 @@ target         url                          bytes    sha256
 snapshots.csv  https://muse.ai/files/...    682406   d8f99690...
 ```
 
-`musebox wait` (or `musebox fetch`) downloads each link into `out/` and checks
-the size and SHA-256. It only accepts `https://muse.ai/files/` links and plain
+Each upload has to be approved in the Muse app, so Muse packs several large
+files into one `results.zip` or `results.tar.gz` and uploads that once.
+
+`musebox wait` (or `musebox fetch`) downloads each link into `out/`, checks
+the size and SHA-256, and unpacks archives. Archives may only contain regular
+files with plain relative names; anything else is refused before a byte is
+written. It only accepts `https://muse.ai/files/` links and plain
 file names. The download runs on your side; the gadget itself still has no
 network access. Shared links are reachable by anyone who has the URL until
 they expire, about two days after upload.

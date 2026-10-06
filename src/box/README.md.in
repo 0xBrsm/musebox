@@ -41,8 +41,12 @@ says to follow it.
 
 Typing a big file into `file.write` calls is slow and error-prone. Instead:
 
-1. Create the file on your own VM, upload it with your file sharing, and get
-   a download link (`https://muse.ai/files/...`).
+1. Create the files on your own VM. Each upload needs the owner to approve
+   it in the Muse app, so upload once per task: if there's more than one
+   large file, pack them all into one `results.zip` (or `results.tar.gz`),
+   with paths as they should appear under `out/` and no folder around them.
+   Upload it with your file sharing and get a download link
+   (`https://muse.ai/files/...`).
 2. Write `out/LINKS.tsv` with `file.write`: a header line, then one line per
    file, tab-separated:
 
@@ -52,9 +56,10 @@ Typing a big file into `file.write` calls is slow and error-prone. Instead:
    ```
 
    `target` is the file name it should have under `out/` (letters, digits,
-   `.`, `_`, `-`, and `/` for subfolders). `bytes` is its exact size and
-   `sha256` its hex SHA-256, computed on your VM.
-3. Write `out/DONE.md` as usual. The owner's side downloads each link into
-   `out/` and checks the size and hash.
+   `.`, `_`, `-`, and `/` for subfolders), e.g. `results.zip`. `bytes` is its
+   exact size and `sha256` its hex SHA-256, computed on your VM.
+3. Write `out/DONE.md` as usual, listing the files inside any archive. The
+   owner's side downloads each link, checks the size and hash, and unpacks
+   archives into `out/`. Archives may only contain regular files.
 
 Links must stay valid for at least a day.

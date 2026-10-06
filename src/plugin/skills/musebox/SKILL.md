@@ -66,6 +66,13 @@ come back to you.**
    about two days after upload, so fetch promptly. If you expect large output, say so in
    TASK.md ("upload the CSV and list it in LINKS.tsv").
 
+   Every upload needs the user to approve it in the Muse app, so Muse is told
+   to bundle several large files into one `results.zip` or `.tar.gz`;
+   `musebox fetch` unpacks it into `out/` (regular files with safe names only)
+   and removes the archive. Tell the user to expect one approval prompt per
+   task with large output. Don't try to avoid the prompt: it's Meta's consent
+   check before your data goes to a public link.
+
 4. Collect:
 
    ```bash

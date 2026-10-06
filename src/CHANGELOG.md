@@ -6,6 +6,7 @@ Semantic versioning. Newest first.
 
 - Large results come back as muse.ai file links listed in `out/LINKS.tsv` instead of being typed into `file.write`. New `musebox fetch`; `musebox wait` fetches automatically. Only `https://muse.ai/files/` links are accepted, with size and SHA-256 checks.
 - Box README, task message and skill explain when to use links (over about 8 KiB, or binary).
+- Several large files go in one `.zip`/`.tar.gz`, so a task needs one upload approval in the Muse app. `musebox fetch` unpacks it, refusing links, devices, unsafe names and oversized content.
 
 ## 0.1.0 (2026-10-05)
 

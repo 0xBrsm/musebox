@@ -89,7 +89,7 @@ cmd_send() {
         "These paths are on that device, NOT on your own VM: don't look for them with your own shell." \
         "Use the device's file.read command to read $BOX/README.md (how the box works), then $dir/TASK.md." \
         "Use the device's file.write command to put results under $dir/out/, finishing with $dir/out/DONE.md." \
-        "For results over about 8 KiB, upload them and list the links in out/LINKS.tsv instead (see the README's \"Large files\")." |
+        "For results over about 8 KiB, upload them (several files: one zip, so one upload) and list the link in out/LINKS.tsv instead (see the README's \"Large files\")." |
         musegadget send-user-msg --session-id "$(cat "$dir/.session")" - >/dev/null
     date -Is >"$dir/.sent"
     echo "sent $id" >&2
@@ -114,6 +114,67 @@ cmd_wait() {
     done
     cat "$dir/out/DONE.md"
     [ ! -f "$dir/out/LINKS.tsv" ] || cmd_fetch "$1" >&2
+}
+
+# Muse bundles several results into one archive so it needs one upload (and
+# one approval in the Muse app). Unpack it into out/, refusing anything but
+# plain files with safe relative names.
+unpack() {
+    python3 - "$1" "$2" "$FETCH_MAX" <<'PY'
+import os, re, sys, tarfile, zipfile
+archive, dest, limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
+SAFE = re.compile(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*")
+RESERVED = {"DONE.md", "LINKS.tsv"}
+
+def fail(msg):
+    sys.exit(f"musebox: {os.path.basename(archive)}: {msg}")
+
+def check(name, size, total):
+    if not SAFE.fullmatch(name) or ".." in name.split("/") or name in RESERVED:
+        fail(f"refusing member {name!r}")
+    total += size
+    if total > limit:
+        fail("unpacked size over the limit")
+    return total
+
+if zipfile.is_zipfile(archive):
+    z = zipfile.ZipFile(archive)
+    members = []
+    for i in z.infolist():
+        if i.is_dir():
+            continue
+        if (i.external_attr >> 16) & 0o170000 not in (0, 0o100000):
+            fail(f"refusing non-regular member {i.filename!r}")
+        members.append((i.filename, i.file_size, lambda i=i: z.open(i)))
+else:
+    t = tarfile.open(archive, "r:*")
+    members = []
+    for m in t.getmembers():
+        if m.isdir():
+            continue
+        if not m.isreg():
+            fail(f"refusing non-regular member {m.name!r}")
+        members.append((m.name.removeprefix("./"), m.size, lambda m=m: t.extractfile(m)))
+if len(members) > 10000:
+    fail("too many members")
+total = 0
+for name, size, _ in members:
+    total = check(name, size, total)
+written = 0
+for name, _, open_member in members:
+    path = os.path.join(dest, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = os.path.join(os.path.dirname(path), "." + os.path.basename(path) + ".fetch")
+    with open_member() as src, open(tmp, "wb") as out:
+        while chunk := src.read(1 << 20):
+            written += len(chunk)
+            if written > limit:
+                os.unlink(tmp)
+                fail("unpacked size over the limit")
+            out.write(chunk)
+    os.replace(tmp, path)
+    print(f"  unpacked {name}", file=sys.stderr)
+PY
 }
 
 # Muse uploads big results to its own file sharing and lists them in
@@ -146,6 +207,10 @@ cmd_fetch() {
         mv -f "$tmp" "$dir/out/$target"
         echo "fetched $target ($bytes bytes)" >&2
         n=$((n + 1))
+        case "$target" in
+            *.zip|*.tar.gz|*.tgz)
+                unpack "$dir/out/$target" "$dir/out" && rm -f "$dir/out/$target" ;;
+        esac
     done <"$links"
     echo "$n file(s) fetched into $dir/out" >&2
 }
